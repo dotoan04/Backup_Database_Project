@@ -1,0 +1,25 @@
+# =============================================================================
+# MBC Database Backup - site inventory
+# Spec: MBC-SPEC-BACKUP-001 v0.2, section 5.1 (survey of 31/07/2026)
+#
+# Deploy as /opt/mbc-backup/sites.conf  --  chmod 600, chown root:root
+#
+# Format: sitename|container_name|db_user|db_name
+#
+# - sitename is the backup key. File names and SharePoint folders are built
+#   from it, NOT from the database name: powerapp_sku and product_database
+#   both use a database called master_product and would overwrite each other.
+# - No passwords here. backup.sh reads POSTGRES_PASSWORD from the container
+#   environment via `docker inspect` (see 5.1.1).
+# - Lines starting with # and blank lines are ignored.
+# =============================================================================
+
+marketplace_misa|manage_project_postgres|postgres|manage_project
+skuapp|sku-postgres-1|skuapp|app_db
+misa_sync_engine|misa_sync_db|postgres|misa_sync
+mbc360|mbc360_app-postgres-1|mbc360|mbc360
+mbc_tool_ads|mbc_tool_ads_postgres|postgres|tool_ads
+powerapp_sku|powerapp_sku_postgres|postgres|master_product
+timesheet_misa|time-tracking-postgres|postgres|time_tracking
+mbc_ocr|max-biocare-ai-postgres-1|biocare|biocare
+product_database|master_product_postgres|postgres|master_product

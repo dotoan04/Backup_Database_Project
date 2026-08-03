@@ -1,0 +1,12 @@
+[Unit]
+Description=Report a failed MBC Database Backup run
+Documentation=file:/opt/mbc-backup/runbook.md
+
+[Service]
+Type=oneshot
+# Single purpose: get an alert out when backup.sh died without being able to
+# send one itself. Keep it minimal - this unit has to work when the main
+# script did not.
+ExecStart=/opt/mbc-backup/notify.sh service-failure
+User=root
+TimeoutStartSec=120

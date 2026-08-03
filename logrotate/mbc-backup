@@ -1,0 +1,15 @@
+# MBC Database Backup log rotation
+# Spec: MBC-SPEC-BACKUP-001 v0.2, section 7.2 - keep 90 days, compress old files.
+# Deploy as /etc/logrotate.d/mbc-backup
+
+/var/log/mbc-backup.log {
+    daily
+    rotate 90
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 root root
+    # The script appends with tee and holds no long-lived handle, so
+    # copytruncate is unnecessary and would risk losing lines mid-run.
+}

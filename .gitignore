@@ -1,0 +1,25 @@
+# Credentials - never commit (spec section 6.1)
+.env
+src/.env
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Real site inventory - deploy-time only
+sites.conf
+src/sites.conf
+
+# Runtime artifacts
+*.dump
+*.dump.age
+*.dump.gpg
+*.sha256
+*.meta.json
+*.sql.gz
+*.log
+
+# Python
+__pycache__/
+*.pyc
+Dac-ta-He-thong-Backup-Database-MBC-v0.2.pdf

@@ -1,0 +1,23 @@
+[Unit]
+Description=MBC Database Backup
+Documentation=file:/opt/mbc-backup/runbook.md
+After=docker.service
+Requires=docker.service
+# Catches the case where backup.sh is killed before it can send its own
+# notification: OOM, TimeoutStartSec, or an external kill (spec 5.8).
+OnFailure=mbc-backup-failure.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mbc-backup/backup.sh
+User=root
+# Two hours is far beyond the few minutes this needs at 146 MB of data. It is
+# there so a hung upload eventually gets killed and OnFailure= fires.
+TimeoutStartSec=7200
+# Keep the dump off the CPU and IO path of the applications that are still
+# serving traffic at 02:00.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,43 @@
+{
+  "$comment": "Paste this into the 'When an HTTP request is received' trigger of Power Automate flow 1. Spec MBC-SPEC-BACKUP-001 v0.2 appendix A. Every nullable field is declared as [\"string\", \"null\"] on purpose: Power Automate fails schema validation at runtime when a field declared as string arrives as null.",
+  "type": "object",
+  "properties": {
+    "run_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["success", "failed", "fatal"] },
+    "hostname": { "type": "string" },
+    "started_at": { "type": "string" },
+    "finished_at": { "type": "string" },
+    "duration_sec": { "type": "integer" },
+    "script_version": { "type": "string" },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "total_sites": { "type": "integer" },
+        "success_count": { "type": "integer" },
+        "failed_count": { "type": "integer" },
+        "total_size_mb": { "type": "number" }
+      }
+    },
+    "sites": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "site": { "type": "string" },
+          "status": { "type": "string" },
+          "step_failed": { "type": ["string", "null"] },
+          "file_name": { "type": ["string", "null"] },
+          "size_mb": { "type": ["number", "null"] },
+          "sha256": { "type": ["string", "null"] },
+          "duration_sec": { "type": ["integer", "null"] },
+          "encrypted": { "type": "boolean" },
+          "sharepoint_url": { "type": ["string", "null"] },
+          "error": { "type": ["string", "null"] }
+        },
+        "required": ["site", "status"]
+      }
+    },
+    "log_tail": { "type": "string" }
+  },
+  "required": ["run_id", "status", "summary", "sites"]
+}

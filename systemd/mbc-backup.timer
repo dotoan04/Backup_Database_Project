@@ -1,0 +1,15 @@
+[Unit]
+Description=Run MBC Database Backup daily at 02:00
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+# Spread the start by up to 15 minutes so this does not collide with every
+# other cron job that also fires exactly at 02:00.
+RandomizedDelaySec=900
+# If the server was off at 02:00, run as soon as it comes back rather than
+# silently skipping a day.
+Persistent=true
+Unit=mbc-backup.service
+
+[Install]
+WantedBy=timers.target
