@@ -48,9 +48,9 @@ def read_sites(path):
     return sites
 
 
-def list_children(client, site_id, path):
-    url = "/sites/%s/drive/root:/%s:/children?$select=id,name,folder,createdDateTime,size&$top=200" % (
-        site_id, client.encode_path(path))
+def list_children(client, drive, path):
+    url = "%s/root:/%s:/children?$select=id,name,folder,createdDateTime,size&$top=200" % (
+        drive, client.encode_path(path))
     items = []
     while url:
         status, body = client.request("GET", url, allow_404=True)
@@ -75,10 +75,10 @@ def _newest_created(items):
     return max(stamps) if stamps else None
 
 
-def rotate_site(client, site_id, library, site, cutoff, min_keep_sets, dry_run):
+def rotate_site(client, drive, library, site, cutoff, min_keep_sets, dry_run):
     """Return (deleted_count, freed_bytes, kept_sets) for one site."""
     site_folder = "%s/%s_db_backup" % (library, site)
-    year_folders = [item for item in list_children(client, site_id, site_folder)
+    year_folders = [item for item in list_children(client, drive, site_folder)
                     if "folder" in item]
     if not year_folders:
         log("%s: no year folders yet, nothing to rotate" % site)
@@ -88,7 +88,7 @@ def rotate_site(client, site_id, library, site, cutoff, min_keep_sets, dry_run):
     sets = {}
     unparsed = 0
     for year in year_folders:
-        for item in list_children(client, site_id, "%s/%s" % (site_folder, year["name"])):
+        for item in list_children(client, drive, "%s/%s" % (site_folder, year["name"])):
             if "folder" in item:
                 continue
             run_id = parse_run_id(item["name"])
@@ -122,7 +122,7 @@ def rotate_site(client, site_id, library, site, cutoff, min_keep_sets, dry_run):
             if dry_run:
                 log("%s: would delete %s (%d bytes)" % (site, item["name"], item.get("size", 0)))
             else:
-                client.request("DELETE", "/sites/%s/drive/items/%s" % (site_id, item["id"]),
+                client.request("DELETE", "%s/items/%s" % (drive, item["id"]),
                                parse_json=False)
                 log("%s: deleted %s" % (site, item["name"]))
             deleted += 1
@@ -145,6 +145,8 @@ def main():
     try:
         client = client_from_env(args.base_dir)
         site_id = site_id_from_env()
+        library_name = os.environ.get("SP_LIBRARY_NAME", "").strip()
+        drive = client.resolve_drive(site_id, library_name)
         library = os.environ.get("SP_LIBRARY_PATH", "DB_Backups").strip("/")
         min_keep = int(os.environ.get("REMOTE_MIN_KEEP_SETS", "3"))
 
@@ -162,7 +164,7 @@ def main():
         for site in sites:
             try:
                 deleted, freed, kept = rotate_site(
-                    client, site_id, library, site, cutoff, min_keep, args.dry_run)
+                    client, drive, library, site, cutoff, min_keep, args.dry_run)
             except GraphError as exc:
                 # One unhealthy site must not stop the others from rotating.
                 log("%s: rotation failed: %s" % (site, exc))

@@ -41,19 +41,19 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def upload_small(client, site_id, folder, name, path):
+def upload_small(client, drive, folder, name, path):
     """Single PUT. Only used for the sidecar files (.sha256, .meta.json)."""
     with open(path, "rb") as handle:
         payload = handle.read()
-    url = "/sites/%s/drive/root:/%s/%s:/content" % (
-        site_id, client.encode_path(folder), client.encode_path(name))
+    url = "%s/root:/%s/%s:/content" % (
+        drive, client.encode_path(folder), client.encode_path(name))
     _, body = client.request(
         "PUT", url, data=payload,
         headers={"Content-Type": "application/octet-stream"})
     return body
 
 
-def upload_session(client, site_id, folder, name, path, size):
+def upload_session(client, drive, folder, name, path, size):
     """Chunked upload with resume (spec 5.4.4).
 
     Database dumps are comfortably over the 4 MB simple-upload limit, so this
@@ -61,8 +61,8 @@ def upload_session(client, site_id, folder, name, path, size):
     which byte it got to and the upload continues from there rather than
     starting over.
     """
-    create_url = "/sites/%s/drive/root:/%s/%s:/createUploadSession" % (
-        site_id, client.encode_path(folder), client.encode_path(name))
+    create_url = "%s/root:/%s/%s:/createUploadSession" % (
+        drive, client.encode_path(folder), client.encode_path(name))
     # "replace" is right here: re-running the backup for the same timestamp
     # should overwrite its own partial file, not create "file 1.dump".
     body = json.dumps({"item": {"@microsoft.graph.conflictBehavior": "replace"}}).encode()
@@ -144,10 +144,10 @@ def _resume_offset(client, upload_url, current):
     return resumed
 
 
-def verify_upload(client, site_id, folder, name, local_path, local_size, mode):
+def verify_upload(client, drive, folder, name, local_path, local_size, mode):
     """Post-upload check (spec 5.4.7). Mandatory: without it the run reports
     success for a file that may never have landed intact."""
-    item = client.get_item_by_path(site_id, "%s/%s" % (folder, name),
+    item = client.get_item_by_path(drive, "%s/%s" % (folder, name),
                                    select="id,name,size,webUrl,file")
     if item is None:
         raise GraphError("%s is not present on SharePoint after upload" % name)
@@ -161,7 +161,7 @@ def verify_upload(client, site_id, folder, name, local_path, local_size, mode):
         # SharePoint exposes quickXorHash rather than sha256, so the only way
         # to compare against our own checksum is to read the file back. At
         # 20-40 MB per run that is cheap and removes all doubt.
-        url = "/sites/%s/drive/items/%s/content" % (site_id, item["id"])
+        url = "%s/items/%s/content" % (drive, item["id"])
         _, raw = client.request("GET", url, parse_json=False, timeout=600)
         remote_sha = hashlib.sha256(raw).hexdigest()
         local_sha = sha256_file(local_path)
@@ -189,6 +189,8 @@ def main():
     try:
         client = client_from_env(args.base_dir)
         site_id = site_id_from_env()
+        library_name = os.environ.get("SP_LIBRARY_NAME", "").strip()
+        drive = client.resolve_drive(site_id, library_name)
         library = os.environ.get("SP_LIBRARY_PATH", "DB_Backups").strip("/")
         verify_mode = os.environ.get("REMOTE_VERIFY", "download").strip().lower()
 
@@ -201,7 +203,7 @@ def main():
             # which makes the SharePoint view painfully slow (spec 5.4.6).
             folder = "%s/%s_db_backup/%s" % (library, args.site, args.year)
 
-        client.ensure_folder(site_id, folder)
+        client.ensure_folder(drive, folder)
 
         results = []
         primary_url = None
@@ -212,11 +214,11 @@ def main():
             size = os.path.getsize(path)
 
             if size < SIMPLE_UPLOAD_LIMIT:
-                upload_small(client, site_id, folder, name, path)
+                upload_small(client, drive, folder, name, path)
             else:
-                upload_session(client, site_id, folder, name, path, size)
+                upload_session(client, drive, folder, name, path, size)
 
-            item = verify_upload(client, site_id, folder, name, path, size, verify_mode)
+            item = verify_upload(client, drive, folder, name, path, size, verify_mode)
             results.append({
                 "name": name,
                 "size": size,

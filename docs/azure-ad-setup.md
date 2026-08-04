@@ -129,7 +129,20 @@ Without that reminder, the first sign of expiry is a silent backup outage.
 
 ## 6. SharePoint library settings
 
-On the site holding `DB_Backups`:
+Select the destination in `.env`:
+
+```
+# Empty means the site's default Documents library.
+SP_LIBRARY_NAME=Backup_Database_Devs
+# Folder inside that library.
+SP_LIBRARY_PATH=DB_Backups
+```
+
+`SP_LIBRARY_PATH` does not select a document library. Graph exposes each
+document library as a separate drive, so `upload.py` resolves
+`SP_LIBRARY_NAME` to the correct drive before creating this folder path.
+
+On the selected library holding `DB_Backups`:
 
 | Setting | Value | Why |
 |---|---|---|

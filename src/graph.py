@@ -276,14 +276,42 @@ class GraphClient:
         """Percent-encode a drive path, keeping the separators intact."""
         return urllib.parse.quote(path.strip("/"), safe="/")
 
-    def get_item_by_path(self, site_id, path, select=None):
-        url = "/sites/%s/drive/root:/%s" % (site_id, self.encode_path(path))
+    def resolve_drive(self, site_id, library_name=None):
+        """Return the Graph base path for the selected document library.
+
+        `/sites/{site-id}/drive` is only the site's default library. Resolve a
+        named library to its drive id so uploads do not silently become a
+        folder in Documents.
+        """
+        if not library_name:
+            return "/sites/%s/drive" % site_id
+
+        wanted = library_name.casefold()
+        url = "/sites/%s/drives?$select=id,name,webUrl&$top=200" % site_id
+        available = []
+        while url:
+            _, body = self.request("GET", url)
+            for drive in body.get("value", []):
+                name = str(drive.get("name", ""))
+                if name:
+                    available.append(name)
+                if name.casefold() == wanted:
+                    log("using SharePoint document library %s" % name)
+                    return "/drives/%s" % drive["id"]
+            url = body.get("@odata.nextLink")
+
+        suffix = "; available: %s" % ", ".join(sorted(available)) if available else ""
+        raise GraphError("SharePoint document library '%s' was not found%s"
+                         % (library_name, suffix))
+
+    def get_item_by_path(self, drive, path, select=None):
+        url = "%s/root:/%s" % (drive, self.encode_path(path))
         if select:
             url += "?$select=%s" % select
         status, body = self.request("GET", url, allow_404=True)
         return body if status != 404 else None
 
-    def ensure_folder(self, site_id, path):
+    def ensure_folder(self, drive, path):
         """Create every missing segment of `path`, idempotently (spec 5.4.3).
 
         conflictBehavior is "fail" rather than "replace": replacing an existing
@@ -296,13 +324,13 @@ class GraphClient:
             parent = walked
             walked = "%s/%s" % (walked, segment) if walked else segment
 
-            if self.get_item_by_path(site_id, walked, select="id") is not None:
+            if self.get_item_by_path(drive, walked, select="id") is not None:
                 continue
 
             if parent:
-                url = "/sites/%s/drive/root:/%s:/children" % (site_id, self.encode_path(parent))
+                url = "%s/root:/%s:/children" % (drive, self.encode_path(parent))
             else:
-                url = "/sites/%s/drive/root/children" % site_id
+                url = "%s/root/children" % drive
 
             payload = json.dumps({
                 "name": segment,
