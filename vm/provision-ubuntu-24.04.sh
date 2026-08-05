@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Provision a server-like Ubuntu 24.04 VM with private developer homes.
+# Provision a server-like Ubuntu 24.04+ VM with private developer homes.
 #
 # WARNING: sudo access to Docker is root-equivalent. The home-directory
 # permissions below prevent accidental access, not access through containers.
@@ -38,8 +38,10 @@ fi
 
 # shellcheck disable=SC1091
 source /etc/os-release
-[[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "24.04" ]] \
-  || die "This script supports Ubuntu 24.04 only (found ${PRETTY_NAME:-unknown})."
+[[ "${ID:-}" == "ubuntu" ]] \
+  || die "This script supports Ubuntu only (found ${PRETTY_NAME:-unknown})."
+dpkg --compare-versions "${VERSION_ID:-0}" ge "24.04" \
+  || die "Ubuntu 24.04 or newer is required (found ${PRETTY_NAME:-unknown})."
 
 if [[ "$#" -eq 0 ]]; then
   USERS=("${DEFAULT_USERS[@]}")

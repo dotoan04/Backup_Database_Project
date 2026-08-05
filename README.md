@@ -65,7 +65,7 @@ logrotate/                 90 days of logs
 install.sh                 idempotent installer
 
 vm/
-  provision-ubuntu-24.04.sh  creates isolated developer accounts and Docker sudo policy
+  provision-ubuntu-24.04.sh  provisions Ubuntu 24.04+ accounts and Docker sudo policy
   verify-isolation.sh        checks account, directory and Docker permissions
 
 docs/
@@ -105,8 +105,8 @@ run has gone through end to end.
 
 ### Server-like development VM
 
-On a clean Ubuntu 24.04 VM, create three private developer accounts with Docker
-available only through `sudo`:
+On a clean Ubuntu 24.04 or newer VM, create three private developer accounts
+with Docker available only through `sudo`:
 
 ```bash
 sudo bash ./vm/provision-ubuntu-24.04.sh dev1 dev2 dev3
