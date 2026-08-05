@@ -64,6 +64,10 @@ systemd/                   timer, service, OnFailure handler
 logrotate/                 90 days of logs
 install.sh                 idempotent installer
 
+vm/
+  provision-ubuntu-24.04.sh  creates isolated developer accounts and Docker sudo policy
+  verify-isolation.sh        checks account, directory and Docker permissions
+
 docs/
   azure-ad-setup.md                            app registration, Sites.Selected
   sharepoint-list-schema.md                    DB_Backup_Log
@@ -98,6 +102,25 @@ Then:
 
 The installer deliberately does not enable the timer. Enable it after a manual
 run has gone through end to end.
+
+### Server-like development VM
+
+On a clean Ubuntu 24.04 VM, create three private developer accounts with Docker
+available only through `sudo`:
+
+```bash
+sudo bash ./vm/provision-ubuntu-24.04.sh dev1 dev2 dev3
+sudo passwd dev1
+sudo passwd dev2
+sudo passwd dev3
+sudo bash ./vm/verify-isolation.sh dev1 dev2 dev3
+```
+
+Each account owns a mode `0700` home and `~/source` directory. Accounts are not
+members of the `docker` group, so direct `docker` commands fail while Docker
+through `sudo` is allowed. This matches the requested server behavior but is
+not a security boundary: arbitrary Docker access is root-equivalent and can be
+used to read any host directory.
 
 **Before going live**, read
 [docs/security-findings.md](docs/security-findings.md): the survey found

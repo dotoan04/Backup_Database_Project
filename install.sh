@@ -39,7 +39,7 @@ command -v age >/dev/null 2>&1 \
 
 say "Installing scripts into ${BASE_DIR}"
 mkdir -p "$BASE_DIR"
-chmod 755 "$BASE_DIR"
+chmod 700 "$BASE_DIR"
 for f in backup.sh verify.sh notify.sh test-restore.sh upload.py rotate.py graph.py runbook.md; do
   install -m 0755 -o root -g root "${REPO_DIR}/src/${f}" "${BASE_DIR}/${f}"
 done
