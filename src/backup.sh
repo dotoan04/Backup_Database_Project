@@ -61,7 +61,9 @@ REMOTE_RETENTION_DAYS="${REMOTE_RETENTION_DAYS:-30}"
 MIN_DUMP_SIZE_BYTES="${MIN_DUMP_SIZE_BYTES:-10240}"
 MIN_FREE_DISK_MB="${MIN_FREE_DISK_MB:-5120}"
 ENCRYPT_ENABLED="${ENCRYPT_ENABLED:-false}"
-SP_LIBRARY_PATH="${SP_LIBRARY_PATH:-DB_Backups}"
+# An explicitly empty path means the root of SP_LIBRARY_NAME. Only fall back
+# when older configurations omit SP_LIBRARY_PATH entirely.
+SP_LIBRARY_PATH="${SP_LIBRARY_PATH-DB_Backups}"
 
 TS="$(date +%Y%m%d_%H%M)"
 RUN_ID="$TS"
