@@ -30,7 +30,9 @@ MAX_SESSION_ATTEMPTS = 3
 MAX_CHUNK_RESUMES = 10
 
 # Only the real backup artifact is worth reporting back as the site link.
-PRIMARY_SUFFIXES = (".dump", ".dump.age", ".dump.gpg")
+# .dump is a PostgreSQL custom-format dump, .db a SQLite snapshot.
+PRIMARY_SUFFIXES = (".dump", ".dump.age", ".dump.gpg",
+                    ".db", ".db.age", ".db.gpg")
 
 
 def sha256_file(path):

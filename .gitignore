@@ -6,14 +6,21 @@ src/.env
 *.pfx
 *.p12
 
-# Real site inventory - deploy-time only
+# Real site inventories - deploy-time only
 sites.conf
 src/sites.conf
+sites-files.conf
+src/sites-files.conf
 
 # Runtime artifacts
 *.dump
 *.dump.age
 *.dump.gpg
+*.db
+*.db.age
+*.db.gpg
+*.db-wal
+*.db-shm
 *.sha256
 *.meta.json
 *.sql.gz

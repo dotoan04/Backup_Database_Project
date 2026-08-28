@@ -38,6 +38,128 @@ restore_image_for() {
   esac
 }
 
+# --- file databases (SQLite) -------------------------------------------------
+# There is no server to start: the snapshot IS the database, so restoring is
+# copying the file. The drill still has to prove the copy is readable and holds
+# the expected rows, which is the part that actually matters.
+FILES_CONF="${BASE_DIR}/sites-files.conf"
+
+is_file_database() {
+  [ -f "$FILES_CONF" ] || return 1
+  sed -e 's/\r$//' "$FILES_CONF" | grep -vE '^[[:space:]]*(#|$)' \
+    | cut -d'|' -f1 | tr -d '[:space:]' | grep -Fqx "$1"
+}
+
+restore_sqlite() {
+  local site="$1" snapshot="$2" scratch meta
+  scratch="$(mktemp -d /tmp/mbc-restore-test.XXXXXX)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '${scratch}'" EXIT
+
+  echo "site      : ${site}"
+  echo "snapshot  : ${snapshot} ($(stat -c%s "$snapshot") bytes)"
+  echo "engine    : sqlite - restored into ${scratch}, never into the application"
+  echo
+
+  if [ -f "${snapshot}.sha256" ]; then
+    echo "--- checksum ---"
+    ( cd "$(dirname "$snapshot")" && sha256sum -c "$(basename "$snapshot").sha256" )
+    echo
+  fi
+
+  meta="${snapshot%.db}.meta.json"
+  [ -f "$meta" ] || meta=""
+
+  cp "$snapshot" "${scratch}/restored.db"
+
+  echo "--- integrity and row counts ---"
+  # `|| rc=$?` rather than a bare call: under `set -e` a failing drill would
+  # otherwise abort the script before it can print the RESULT line.
+  local rc=0
+  python3 - "${scratch}/restored.db" "$meta" <<'PY' || rc=$?
+import json, sqlite3, sys
+
+path, meta_path = sys.argv[1], sys.argv[2]
+problems = []
+counts = {}
+
+# A truncated or overwritten file never reaches integrity_check - SQLite
+# cannot read the header at all. Catch that here: at 02:00 a plain sentence is
+# worth more than a traceback.
+try:
+    conn = sqlite3.connect(path)
+    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    print("integrity_check: %s" % integrity)
+    if integrity != "ok":
+        problems.append("integrity_check returned %r" % integrity)
+
+    names = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    counts = {n: conn.execute('SELECT count(*) FROM "%s"'
+                              % n.replace('"', '""')).fetchone()[0] for n in names}
+    conn.close()
+
+    for name in names:
+        print("  %-40s %d" % (name, counts[name]))
+    print("total rows: %d" % sum(counts.values()))
+except sqlite3.DatabaseError as exc:
+    problems.append("the file could not be read as a SQLite database: %s" % exc)
+
+if not counts and not problems:
+    problems.append("the restored database has no user tables")
+
+# The metadata was written at backup time from the source database. Comparing
+# against it proves the snapshot survived encryption, upload and download
+# unchanged - not just that it is a valid SQLite file.
+if meta_path:
+    with open(meta_path, encoding="utf-8") as handle:
+        expected = json.load(handle).get("tables") or {}
+    for name, want in sorted(expected.items()):
+        got = counts.get(name)
+        if got is None:
+            problems.append("table %s is missing (expected %d rows)" % (name, want))
+        elif got != want:
+            problems.append("table %s has %d rows, metadata says %d" % (name, got, want))
+    if expected and not problems:
+        print("\nrow counts match the metadata written at backup time.")
+
+if problems:
+    print("\nPROBLEMS:")
+    for item in problems:
+        print("  - %s" % item)
+    sys.exit(1)
+PY
+
+  echo
+  if [ "$rc" -eq 0 ]; then
+    echo "RESULT: restore verified - the snapshot is readable and complete."
+  else
+    echo "RESULT: FAILED. Read the problems above before trusting this backup."
+  fi
+  echo
+  echo "To restore for real, see the SQLite section of runbook.md. The step"
+  echo "everyone forgets: delete the stale app.db-wal and app.db-shm, or SQLite"
+  echo "replays the old WAL over the restored file and corrupts it."
+  return "$rc"
+}
+
+if [ -z "$DUMPFILE" ] && is_file_database "$SITE"; then
+  DUMPFILE="$(ls -t "${BACKUP_DIR}/${SITE}_backup_"*.db 2>/dev/null | head -1 || true)"
+  if [ -z "$DUMPFILE" ]; then
+    echo "No snapshot found for '${SITE}' in ${BACKUP_DIR}." >&2
+    echo "Download one from SharePoint first, or pass the path as the second argument." >&2
+    exit 1
+  fi
+fi
+case "$DUMPFILE" in
+  *.db)
+    restore_sqlite "$SITE" "$DUMPFILE"
+    exit $?
+    ;;
+esac
+
+# --- PostgreSQL --------------------------------------------------------------
 if [ -z "$DUMPFILE" ]; then
   DUMPFILE="$(ls -t "${BACKUP_DIR}/${SITE}_backup_"*.dump 2>/dev/null | head -1 || true)"
 fi

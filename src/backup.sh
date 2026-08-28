@@ -19,6 +19,8 @@ BACKUP_DIR="${MBC_BACKUP_DIR:-/var/backups/mbc}"
 LOG_FILE="${MBC_LOG_FILE:-/var/log/mbc-backup.log}"
 STATE_DIR="${MBC_STATE_DIR:-/var/lib/mbc-backup}"
 SITES_CONF="${BASE_DIR}/sites.conf"
+# File-based databases (SQLite). Optional: absent means there are none.
+FILES_CONF="${BASE_DIR}/sites-files.conf"
 
 # --- exit codes (spec 7.1) ---------------------------------------------------
 EXIT_OK=0        # every site backed up
@@ -137,7 +139,9 @@ json.dump({
     "status": status,
     "step_failed": nullable(step),
     "file_name": nullable(file_name),
-    "size_mb": round(float(size_mb), 1) if size_mb else None,
+    # Already rounded by bytes_to_mb, which keeps extra decimals for files too
+    # small to show up at one. Rounding again here would undo that.
+    "size_mb": float(size_mb) if size_mb else None,
     "sha256": nullable(sha),
     "duration_sec": int(duration) if duration else None,
     "encrypted": encrypted == "true",
@@ -157,17 +161,73 @@ fail() {
                     "$SITE_ENCRYPTED" "" "$msg"
 }
 
-bytes_to_mb() { python3 -c 'import sys; print(round(int(sys.argv[1])/1048576, 1))' "$1"; }
+# One decimal is right for a 40 MB pg_dump but rounds a SQLite snapshot of a
+# few hundred KB to 0.0, which reads in the notification as an empty backup.
+# The size floors guarantee a real backup is never small enough to round to
+# zero at three decimals.
+bytes_to_mb() {
+  python3 -c 'import sys
+mb = int(sys.argv[1]) / 1048576
+print(round(mb, 1) if round(mb, 1) > 0 else round(mb, 3))' "$1"
+}
+
+# maybe_encrypt <artifact> (spec 6.3)
+# Shared by every site type. On success ENCRYPT_RESULT holds the path to
+# upload - the original when encryption is off, the .age file when it is on.
+# On failure ENCRYPT_ERROR holds the reason and the return status is 1.
+maybe_encrypt() {
+  local artifact="$1"
+  ENCRYPT_RESULT="$artifact"
+  ENCRYPT_ERROR=""
+  [ "$ENCRYPT_ENABLED" = "true" ] || return 0
+
+  if ! command -v age >/dev/null 2>&1; then
+    ENCRYPT_ERROR="ENCRYPT_ENABLED=true but 'age' is not installed"
+    return 1
+  fi
+  if [ -z "${AGE_RECIPIENT:-}" ]; then
+    ENCRYPT_ERROR="ENCRYPT_ENABLED=true but AGE_RECIPIENT is empty"
+    return 1
+  fi
+  if ! age -r "$AGE_RECIPIENT" -o "${artifact}.age" "$artifact" 2>>"$LOG_FILE"; then
+    rm -f "${artifact}.age"
+    ENCRYPT_ERROR="age encryption failed"
+    return 1
+  fi
+  shred -u "$artifact" 2>>"$LOG_FILE" || rm -f "$artifact"
+  ENCRYPT_RESULT="${artifact}.age"
+  SITE_ENCRYPTED="true"
+  return 0
+}
 
 # --- main loop ---------------------------------------------------------------
 
 declare -a FAIL_CODES=()
 declare -a OK_SITES=()
 
-mapfile -t SITE_LINES < <(sed -e 's/\r$//' "$SITES_CONF" | grep -vE '^[[:space:]]*(#|$)')
-TOTAL_SITES=${#SITE_LINES[@]}
-log "loaded ${TOTAL_SITES} sites from ${SITES_CONF}"
+# `|| true` is load-bearing. When the file holds nothing but comments, grep
+# exits 1; with `set -E` the ERR trap is inherited by the process substitution
+# and fires there, and because log() writes through tee its FATAL line lands on
+# the subshell's stdout - which is mapfile's input. The result is a phantom
+# site whose name is a log line, plus a spurious FATAL alert. An inventory that
+# is empty or fully commented out is a normal state, not an error.
+read_inventory() {
+  sed -e 's/\r$//' "$1" | grep -vE '^[[:space:]]*(#|$)' || true
+}
 
+mapfile -t SITE_LINES < <(read_inventory "$SITES_CONF")
+
+# File-based databases are optional and live in their own inventory, so the
+# nine PostgreSQL lines keep the format they already have.
+declare -a FILE_LINES=()
+if [ -f "$FILES_CONF" ]; then
+  mapfile -t FILE_LINES < <(read_inventory "$FILES_CONF")
+fi
+
+TOTAL_SITES=$(( ${#SITE_LINES[@]} + ${#FILE_LINES[@]} ))
+log "loaded ${#SITE_LINES[@]} PostgreSQL sites from ${SITES_CONF} and ${#FILE_LINES[@]} file databases from ${FILES_CONF}"
+
+# Shared across both loops so the per-site JSON files sort in run order.
 SITE_NUM=0
 for LINE in "${SITE_LINES[@]}"; do
   SITE_NUM=$((SITE_NUM + 1))
@@ -269,24 +329,12 @@ for LINE in "${SITE_LINES[@]}"; do
   log "[${SITE}] verify ok, sha256=${PLAIN_SHA:0:12}..."
 
   # ---------- 5. encrypt (spec 6.3) ----------
-  ARTIFACT="$OUTFILE"
-  if [ "$ENCRYPT_ENABLED" = "true" ]; then
-    if ! command -v age >/dev/null 2>&1; then
-      fail "$SITE" "encrypt" "$EXIT_PARTIAL" "ENCRYPT_ENABLED=true but 'age' is not installed"
-      continue
-    fi
-    if [ -z "${AGE_RECIPIENT:-}" ]; then
-      fail "$SITE" "encrypt" "$EXIT_PARTIAL" "ENCRYPT_ENABLED=true but AGE_RECIPIENT is empty"
-      continue
-    fi
-    if ! age -r "$AGE_RECIPIENT" -o "${OUTFILE}.age" "$OUTFILE" 2>>"$LOG_FILE"; then
-      rm -f "${OUTFILE}.age"
-      fail "$SITE" "encrypt" "$EXIT_PARTIAL" "age encryption failed"
-      continue
-    fi
-    shred -u "$OUTFILE" 2>>"$LOG_FILE" || rm -f "$OUTFILE"
-    ARTIFACT="${OUTFILE}.age"
-    SITE_ENCRYPTED="true"
+  if ! maybe_encrypt "$OUTFILE"; then
+    fail "$SITE" "encrypt" "$EXIT_PARTIAL" "$ENCRYPT_ERROR"
+    continue
+  fi
+  ARTIFACT="$ENCRYPT_RESULT"
+  if [ "$SITE_ENCRYPTED" = "true" ]; then
     SITE_FILE_NAME="$(basename "$ARTIFACT")"
     log "[${SITE}] encrypted -> ${SITE_FILE_NAME}"
   fi
@@ -353,6 +401,163 @@ PY
   # local copies are safe to drop.
   find "$BACKUP_DIR" -maxdepth 1 -type f \
        \( -name "${SITE}_backup_*" -o -name "${SITE}_globals_*" \) \
+       -mtime "+${LOCAL_RETENTION_DAYS}" -delete 2>>"$LOG_FILE" || \
+    warn "[${SITE}] local rotation reported an error"
+
+  OK_SITES+=("$SITE")
+  write_site_result "$SITE" "success" "" "$SITE_FILE_NAME" "$SITE_SIZE_MB" \
+                    "$ARTIFACT_SHA" "$(( $(date +%s) - SITE_START ))" \
+                    "$SITE_ENCRYPTED" "$SITE_URL" ""
+  log "[${SITE}] done in $(( $(date +%s) - SITE_START ))s"
+done
+
+# --- file-based databases (SQLite) -------------------------------------------
+# Same contract as the loop above: one result JSON per site in RUN_DIR, the
+# same file naming, the same SharePoint layout. Everything downstream -
+# notify.sh, rotate.py, both Power Automate flows - therefore needs no change.
+#
+# These databases belong to applications that are not part of this project.
+# The whole path is read-only: no container is stopped, no file of theirs is
+# written, nothing needs to be installed on their side.
+for LINE in "${FILE_LINES[@]}"; do
+  SITE_NUM=$((SITE_NUM + 1))
+  SITE_INDEX="$(printf '%02d' "$SITE_NUM")"
+
+  IFS='|' read -r SITE ENGINE DB_PATH <<< "$LINE"
+  SITE="${SITE//[[:space:]]/}"
+  ENGINE="${ENGINE//[[:space:]]/}"
+  # Trim the ends only. Unlike a container name, a filesystem path is allowed
+  # to contain spaces.
+  DB_PATH="$(printf '%s' "$DB_PATH" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+  SITE_START="$(date +%s)"
+  SITE_FILE_NAME=""
+  SITE_SIZE_MB=""
+  SITE_SHA=""
+  SITE_ENCRYPTED="false"
+
+  if [ -z "$SITE" ] || [ -z "$ENGINE" ] || [ -z "$DB_PATH" ]; then
+    log "ERROR: malformed sites-files.conf line: ${LINE}"
+    FAIL_CODES+=("$EXIT_PARTIAL")
+    continue
+  fi
+  if [ "$ENGINE" != "sqlite" ]; then
+    fail "$SITE" "precheck" "$EXIT_PARTIAL" \
+         "unsupported engine '${ENGINE}' - only sqlite is implemented"
+    continue
+  fi
+
+  log "--- [${SITE_NUM}/${TOTAL_SITES}] ${SITE} (sqlite ${DB_PATH}) ---"
+
+  # ---------- 1. preconditions ----------
+  FREE_MB="$(df -Pm "$BACKUP_DIR" | awk 'NR==2{print $4}')"
+  if [ "$FREE_MB" -le "$MIN_FREE_DISK_MB" ]; then
+    fail "$SITE" "precheck" "$EXIT_DISK" \
+         "free disk ${FREE_MB}MB is at or below threshold ${MIN_FREE_DISK_MB}MB - snapshot skipped"
+    continue
+  fi
+
+  # ---------- 2. snapshot and verify ----------
+  # sqlite-snapshot.py does both in one pass: it has to open the database to
+  # copy it, so checking the copy afterwards costs nothing extra. Its exit
+  # codes are the same 20/30 used here.
+  OUTFILE="${BACKUP_DIR}/${SITE}_backup_${TS}.db"
+  SITE_FILE_NAME="$(basename "$OUTFILE")"
+  PREV_META="$(ls -t "${BACKUP_DIR}/${SITE}_backup_"*.meta.json 2>/dev/null \
+               | grep -v "_${TS}\.meta\.json$" | head -1 || true)"
+
+  log "[${SITE}] sqlite online backup -> ${SITE_FILE_NAME}"
+  if SNAP_JSON="$("${BASE_DIR}/sqlite-snapshot.py" \
+                    --source "$DB_PATH" --dest "$OUTFILE" \
+                    --previous-meta "$PREV_META" 2>>"$LOG_FILE")"; then
+    SNAP_RC=0
+  else
+    SNAP_RC=$?
+  fi
+
+  if [ "$SNAP_RC" -ne 0 ]; then
+    SNAP_ERR="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1] or "{}").get("error",""))' \
+                "$SNAP_JSON" 2>/dev/null || true)"
+    if [ "$SNAP_RC" -eq "$EXIT_VERIFY" ]; then
+      # File deliberately kept for investigation, and never uploaded.
+      fail "$SITE" "verify" "$EXIT_VERIFY" "${SNAP_ERR:-snapshot failed verification}"
+    else
+      fail "$SITE" "snapshot" "$EXIT_DUMP" "${SNAP_ERR:-could not snapshot ${DB_PATH}}"
+    fi
+    continue
+  fi
+
+  SIZE_BYTES="$(stat -c%s "$OUTFILE")"
+  SITE_SIZE_MB="$(bytes_to_mb "$SIZE_BYTES")"
+  PLAIN_SHA="$(sha256_of "$OUTFILE")"
+  SITE_SHA="$PLAIN_SHA"
+  log "[${SITE}] snapshot ok: ${SIZE_BYTES} bytes, sha256=${PLAIN_SHA:0:12}..."
+
+  # ---------- 3. encrypt (spec 6.3) ----------
+  if ! maybe_encrypt "$OUTFILE"; then
+    fail "$SITE" "encrypt" "$EXIT_PARTIAL" "$ENCRYPT_ERROR"
+    continue
+  fi
+  ARTIFACT="$ENCRYPT_RESULT"
+  if [ "$SITE_ENCRYPTED" = "true" ]; then
+    SITE_FILE_NAME="$(basename "$ARTIFACT")"
+    log "[${SITE}] encrypted -> ${SITE_FILE_NAME}"
+  fi
+
+  write_checksum "$ARTIFACT"
+  ARTIFACT_SHA="$(sha256_of "$ARTIFACT")"
+
+  # ---------- 4. metadata (spec 5.2.5) ----------
+  # Row counts are part of the metadata because they are what the next run
+  # compares against: SQLite reuses freed pages, so a database can lose every
+  # row without the file shrinking by a single byte.
+  METAFILE="${BACKUP_DIR}/${SITE}_backup_${TS}.meta.json"
+  python3 - "$SNAP_JSON" "$SITE" "$STARTED_AT" "$PLAIN_SHA" "$ARTIFACT_SHA" \
+             "$SITE_ENCRYPTED" "$SCRIPT_VERSION" "$(basename "$ARTIFACT")" \
+    > "$METAFILE" <<'PY'
+import json, os, sys
+
+snap = json.loads(sys.argv[1])
+(site, created_at, sha_plain, sha_artifact, encrypted,
+ script_version, artifact_name) = sys.argv[2:9]
+
+json.dump({
+    "site": site,
+    "engine": "sqlite",
+    "source_path": snap["source"],
+    "database": os.path.basename(snap["source"]),
+    "dump_format": "sqlite-online-backup",
+    "sqlite_version": snap["sqlite_version"],
+    "journal_mode": snap["journal_mode"],
+    "page_size": snap["page_size"],
+    "created_at": created_at,
+    "size_bytes": snap["size_bytes"],
+    "tables": snap["tables"],
+    "total_rows": snap["total_rows"],
+    "integrity_check": snap["integrity"],
+    "sha256": sha_plain,
+    "sha256_uploaded": sha_artifact,
+    "uploaded_file": artifact_name,
+    "encrypted": encrypted == "true",
+    "script_version": script_version,
+}, sys.stdout, indent=2, ensure_ascii=False)
+PY
+  log "[${SITE}] metadata written (sqlite $(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["total_rows"])' "$SNAP_JSON") rows)"
+
+  # ---------- 5. upload (spec 5.4) ----------
+  if ! UPLOAD_JSON="$("${BASE_DIR}/upload.py" --site "$SITE" --year "$YEAR" \
+                        --file "$ARTIFACT" \
+                        --file "${ARTIFACT}.sha256" \
+                        --file "$METAFILE" 2>>"$LOG_FILE")"; then
+    fail "$SITE" "upload" "$EXIT_UPLOAD" \
+         "SharePoint upload failed - local files kept in ${BACKUP_DIR}"
+    continue
+  fi
+  SITE_URL="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("primary_web_url") or "")' "$UPLOAD_JSON")"
+  log "[${SITE}] upload ok -> ${SITE_URL:-no url returned}"
+
+  # ---------- 6. local rotation (spec 5.7.1) ----------
+  find "$BACKUP_DIR" -maxdepth 1 -type f -name "${SITE}_backup_*" \
        -mtime "+${LOCAL_RETENTION_DAYS}" -delete 2>>"$LOG_FILE" || \
     warn "[${SITE}] local rotation reported an error"
 

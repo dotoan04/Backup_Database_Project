@@ -38,13 +38,35 @@ def parse_run_id(name):
 
 
 def read_sites(path):
+    """Site names from one inventory file. A missing file means no sites.
+
+    Only the first field is read, so this works for both inventories:
+    sites.conf is sitename|container|db_user|db_name and sites-files.conf is
+    sitename|engine|path.
+    """
     sites = []
+    if not os.path.isfile(path):
+        return sites
     with open(path, encoding="utf-8") as handle:
         for raw in handle:
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
             sites.append(line.split("|")[0].strip())
+    return sites
+
+
+def read_all_sites(base_dir):
+    """Every site that has a folder on SharePoint, whatever its engine.
+
+    Retention has to cover file databases too, otherwise their folders grow
+    without limit while the PostgreSQL ones are pruned.
+    """
+    sites = []
+    for name in ("sites.conf", "sites-files.conf"):
+        for site in read_sites(os.path.join(base_dir, name)):
+            if site not in sites:
+                sites.append(site)
     return sites
 
 
@@ -150,7 +172,7 @@ def main():
         library = os.environ.get("SP_LIBRARY_PATH", "DB_Backups").strip("/")
         min_keep = int(os.environ.get("REMOTE_MIN_KEEP_SETS", "3"))
 
-        sites = args.sites or read_sites(os.path.join(args.base_dir, "sites.conf"))
+        sites = args.sites or read_all_sites(args.base_dir)
         cutoff = datetime.datetime.now(datetime.timezone.utc) - \
             datetime.timedelta(days=args.days)
         log("retention %d days, cutoff %s, keeping at least %d sets per site"

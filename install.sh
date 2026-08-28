@@ -40,13 +40,15 @@ command -v age >/dev/null 2>&1 \
 say "Installing scripts into ${BASE_DIR}"
 mkdir -p "$BASE_DIR"
 chmod 700 "$BASE_DIR"
-for f in backup.sh verify.sh notify.sh test-restore.sh upload.py rotate.py graph.py runbook.md; do
+for f in backup.sh verify.sh notify.sh test-restore.sh upload.py rotate.py graph.py \
+         sqlite-snapshot.py discover.py runbook.md; do
   install -m 0755 -o root -g root "${REPO_DIR}/src/${f}" "${BASE_DIR}/${f}"
 done
 # Sourced and imported, never executed directly.
 chmod 0644 "${BASE_DIR}/verify.sh" "${BASE_DIR}/graph.py" "${BASE_DIR}/runbook.md"
 install -m 0644 -o root -g root "${REPO_DIR}/src/.env.example" "${BASE_DIR}/.env.example"
 install -m 0644 -o root -g root "${REPO_DIR}/src/sites.conf.example" "${BASE_DIR}/sites.conf.example"
+install -m 0644 -o root -g root "${REPO_DIR}/src/sites-files.conf.example" "${BASE_DIR}/sites-files.conf.example"
 
 say "Preparing configuration"
 if [ ! -f "${BASE_DIR}/.env" ]; then
@@ -61,9 +63,17 @@ if [ ! -f "${BASE_DIR}/sites.conf" ]; then
 else
   echo "${BASE_DIR}/sites.conf already exists, left untouched."
 fi
-# Credentials and the site inventory are root-only (spec 6.1).
-chmod 600 "${BASE_DIR}/.env" "${BASE_DIR}/sites.conf"
-chown root:root "${BASE_DIR}/.env" "${BASE_DIR}/sites.conf"
+if [ ! -f "${BASE_DIR}/sites-files.conf" ]; then
+  install -m 0600 -o root -g root "${REPO_DIR}/src/sites-files.conf.example" "${BASE_DIR}/sites-files.conf"
+  echo "Created ${BASE_DIR}/sites-files.conf - check every path still resolves."
+else
+  echo "${BASE_DIR}/sites-files.conf already exists, left untouched."
+fi
+# Credentials and the site inventories are root-only (spec 6.1). The file
+# inventory holds paths into other teams' home directories, which is not
+# something every account on the box needs to be able to read.
+chmod 600 "${BASE_DIR}/.env" "${BASE_DIR}/sites.conf" "${BASE_DIR}/sites-files.conf"
+chown root:root "${BASE_DIR}/.env" "${BASE_DIR}/sites.conf" "${BASE_DIR}/sites-files.conf"
 
 say "Creating data directories"
 mkdir -p "$BACKUP_DIR" "${STATE_DIR}/runs"
@@ -95,6 +105,11 @@ Next steps:
 
   2. Check /opt/mbc-backup/sites.conf against the containers actually running:
        docker ps --format '{{.Names}}'
+     and /opt/mbc-backup/sites-files.conf against the paths on disk:
+       cut -d'|' -f3 /opt/mbc-backup/sites-files.conf | grep -v '^#' | xargs -r ls -la
+
+     Or let the host tell you what it is running, and what is not covered yet:
+       /opt/mbc-backup/discover.py
 
   3. Dry run, watching the log:
        /opt/mbc-backup/backup.sh ; echo "exit=$?"

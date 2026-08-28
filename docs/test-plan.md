@@ -211,9 +211,117 @@ inside an MVCC snapshot and does not lock ordinary reads or writes.
 
 ---
 
+# File databases (SQLite)
+
+These sites belong to applications owned by other teams. Every case below must
+be run against the real application, on the real VPS, while it is running.
+Nothing here requires stopping it.
+
+## TC-F01 — Normal run of a file database site
+
+```bash
+/opt/mbc-backup/backup.sh ; echo "exit=$?"
+```
+
+Expected: exit 0. In `/var/backups/mbc/` a `<site>_backup_<ts>.db`, its
+`.sha256` and its `.meta.json`. The metadata lists every table with a row
+count, and `integrity_check` is `ok`. All three files appear on SharePoint
+under `/DB_Backups/<site>/<year>/`, and the site shows in the Teams card.
+
+## TC-F02 — The application is not disturbed
+
+Immediately before and after the run:
+
+```bash
+ls -la --time-style=full-iso /home/po_app/app/data/
+docker ps --filter name=<app container> --format '{{.Status}}'
+```
+
+Expected: `app.db`, `app.db-wal` and `app.db-shm` have **the same modification
+times** afterwards as before — the read-only connection cannot write to them.
+The container status is unchanged, and the application keeps serving requests
+throughout. This is the case that proves the backup is safe to run against
+somebody else's application.
+
+## TC-F03 — A file copy would have lost everything
+
+Evidence for why `sqlite-snapshot.py` exists. Compare, for the same database:
+
+```bash
+cp /home/po_app/app/data/app.db /tmp/naive.db
+python3 -c "import sqlite3;print([r[0] for r in sqlite3.connect('/tmp/naive.db').execute(  \"SELECT name FROM sqlite_master WHERE type='table'\")])"
+python3 -c "import json;m=json.load(open('/var/backups/mbc/<site>_backup_<ts>.meta.json'));print(m['tables'])"
+rm /tmp/naive.db
+```
+
+Expected: the naive copy lists few or no tables; the snapshot metadata lists
+them all with real row counts. Record both outputs — this is the number to
+show anyone who proposes backing the file up with `cp` or `tar`.
+
+## TC-F04 — Restore drill
+
+```bash
+/opt/mbc-backup/test-restore.sh <site>
+```
+
+Expected: `RESULT: restore verified`, and `row counts match the metadata
+written at backup time`. The application's own files are never touched: the
+drill restores into a scratch directory under `/tmp` and deletes it.
+
+## TC-F05 — Real restore, including the -wal trap
+
+Follow **Restoring a file database** in `runbook.md` end to end, into a copy of
+the application directory rather than the live one.
+
+Then repeat step 6 **wrongly** on purpose: put the restored `app.db` in place
+while leaving the old `app.db-wal` next to it, and open it.
+
+Expected: the correct procedure gives the restored row counts. The wrong one
+gives pre-incident data back or an unreadable file. Record what actually
+happened — this is the failure everyone hits once.
+
+## TC-F06 — Corrupt snapshot is caught
+
+```bash
+cp <a good snapshot> /tmp/broken.db && head -c 20000 /tmp/broken.db > /tmp/t && mv /tmp/t /tmp/broken.db
+/opt/mbc-backup/test-restore.sh <site> /tmp/broken.db ; echo "exit=$?"
+```
+
+Expected: non-zero exit, and `PROBLEMS: the file could not be read as a SQLite
+database`. No traceback.
+
+## TC-F07 — Row-count shrink warning
+
+On a **test copy** of the database, delete most of the rows in one table, then
+run the backup twice with the deletion in between.
+
+Expected: exit 0 both times — a warning must never fail a backup — and the log
+carries `row count dropped to N from M`. A table dropped entirely produces
+`table X was present in the previous run and is now gone`.
+
+Note that the file size will barely change: SQLite reuses freed pages. That is
+exactly why this check counts rows instead of bytes.
+
+## TC-F08 — Bad inventory line
+
+Add a line with a path that does not exist, and another with an engine that is
+not `sqlite`.
+
+```bash
+/opt/mbc-backup/backup.sh ; echo "exit=$?"
+```
+
+Expected: exit 20 for the missing path, 10 when mixed with other failure kinds.
+Every other site in the run still succeeds, and the notification names the
+failing site and the reason. Then remove the bad lines and confirm exit 0.
+
+---
+
 ## Definition of Done (spec 10.2)
 
 - [ ] TC-01 … TC-12 all pass, with a written record
+- [ ] TC-F01 … TC-F08 all pass for every file database site
+- [ ] TC-F02 has been run: the application team can be shown that the backup does not touch their files
 - [ ] At least **one** real restore into a scratch container, with row counts compared
 - [ ] `runbook.md` has been read and followed by **somebody else**, without needing to ask questions
 - [ ] No credential anywhere in the git history
@@ -239,3 +347,11 @@ inside an MVCC snapshot and does not lock ordinary reads or writes.
 | TC-10 | | | | |
 | TC-11 | | | | |
 | TC-12 | | | | |
+| TC-F01 | | | | |
+| TC-F02 | | | | |
+| TC-F03 | | | | |
+| TC-F04 | | | | |
+| TC-F05 | | | | |
+| TC-F06 | | | | |
+| TC-F07 | | | | |
+| TC-F08 | | | | |

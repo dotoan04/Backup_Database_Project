@@ -1,0 +1,30 @@
+# =============================================================================
+# MBC Database Backup - file-database inventory
+# Spec: MBC-SPEC-BACKUP-001 v0.2, section 5.1, file-database site type
+#
+# Deploy as /opt/mbc-backup/sites-files.conf  --  chmod 600, chown root:root
+#
+# Format: sitename|engine|path
+#
+# - sitename is the backup key, exactly as in sites.conf. It names the files
+#   and the SharePoint folder, so it must be unique across BOTH files and must
+#   never change once a site has been backed up: renaming splits the history.
+# - engine is currently only `sqlite`. The field exists so a second file-based
+#   engine can be added without touching the format again.
+# - path is the absolute path to the live database file ON THE HOST. For a
+#   container using a bind mount, this is the host side of the mount, not the
+#   path inside the container.
+# - Lines starting with # and blank lines are ignored.
+#
+# These databases are read through the SQLite online backup API with a
+# read-only connection. Nothing is written, no container is stopped, and the
+# application does not need to know it is being backed up.
+#
+# Finding the host path of a bind-mounted database:
+#   docker inspect <container> --format '{{json .Mounts}}' | python3 -m json.tool
+#   -> take "Source" of the entry whose "Type" is "bind"
+# =============================================================================
+
+# PO app (RM Price + synced Raw Materials), bind mount ./data in ~po_app/app.
+# Owned by root because the container runs as root; the backup runs as root too.
+po_app_rm_price|sqlite|/home/po_app/app/data/app.db

@@ -18,6 +18,17 @@ out a restore at 02:00 without calling anyone. Follow it top to bottom.
 
 Site → container → database mapping is in `/opt/mbc-backup/sites.conf`.
 
+**Which kind of database is it?** Two site types are backed up, and they
+restore completely differently. Check which inventory the site is listed in:
+
+| Inventory | Type | Backup file | Restore procedure |
+|---|---|---|---|
+| `/opt/mbc-backup/sites.conf` | PostgreSQL in a container | `*.dump` | Steps 1-8 below |
+| `/opt/mbc-backup/sites-files.conf` | File database (SQLite) | `*.db` | **"Restoring a file database"** at the end of this runbook |
+
+Do not follow steps 1-8 for a `.db` file. There is no server to restore into:
+the backup file *is* the database.
+
 ---
 
 ## Step 1 — Stop writes to the database
@@ -182,6 +193,78 @@ docker start <app_container>
 
 ---
 
+## Restoring a file database (SQLite)
+
+For any site listed in `/opt/mbc-backup/sites-files.conf`. These databases
+belong to other teams' applications, so read the whole section before typing
+anything.
+
+### What makes this different
+
+The backup is one ordinary file and restoring it is copying that file into
+place. Two things make it easy to get wrong:
+
+- **The application must be stopped first.** SQLite has no server to disconnect
+  clients from. Swapping the file underneath a running application gives it a
+  file handle to a database that no longer exists.
+- **The stale `-wal` and `-shm` sidecars must be deleted.** This is the step
+  that destroys restores. If you drop the restored `app.db` next to the old
+  `app.db-wal`, SQLite replays that write-ahead log on top of it at startup.
+  The result is a mix of restored and pre-incident data, or an unreadable
+  file, and it happens silently.
+
+### Procedure
+
+```bash
+SITE=po_app_rm_price
+APP_DIR=/home/po_app/app                      # from sites-files.conf, third field
+DB=${APP_DIR}/data/app.db
+
+# 1. Pick the backup. Newest local copy:
+ls -lt /var/backups/mbc/${SITE}_backup_*.db
+SNAP=/var/backups/mbc/${SITE}_backup_YYYYMMDD_HHMM.db
+# Older than 7 days: download it from SharePoint /DB_Backups/${SITE}/{year}/
+
+# 2. Verify it BEFORE trusting it. Never skip this.
+cd "$(dirname "$SNAP")" && sha256sum -c "$(basename "$SNAP").sha256"
+/opt/mbc-backup/test-restore.sh "$SITE" "$SNAP"
+# Must print: RESULT: restore verified
+
+# 3. Decrypt first if the file ends in .age
+#    age -d -i /path/to/key.txt -o "${SNAP%.age}" "$SNAP"
+
+# 4. Stop the application.
+cd "$APP_DIR" && docker compose stop
+
+# 5. Keep the current state. It is the only copy of everything written since
+#    the last backup, and you may need it to reconcile afterwards.
+mkdir -p /var/backups/mbc/pre-restore-$(date +%Y%m%d_%H%M)
+mv "$DB" "$DB"-wal "$DB"-shm /var/backups/mbc/pre-restore-*/ 2>/dev/null
+
+# 6. Put the snapshot in place. The -wal and -shm files must NOT exist.
+cp "$SNAP" "$DB"
+ls -la "$(dirname "$DB")"          # expect app.db only, no -wal, no -shm
+
+# 7. Match the ownership the application container expects. Check what the
+#    files in the pre-restore directory had - usually root:root, mode 644.
+chown root:root "$DB" && chmod 644 "$DB"
+
+# 8. Start it and confirm.
+docker compose start
+docker compose logs --tail 50
+```
+
+Then check the data in the application itself before telling anyone it is
+fixed, and record what was lost between the backup timestamp and the incident.
+
+### If the application will not start
+
+Ninety percent of the time it is step 6 or step 7: a leftover `-wal` file, or
+the file is owned by the wrong user. Compare against the pre-restore directory:
+those files show exactly what ownership and mode the container was happy with.
+
+---
+
 ## Quarterly restore drill
 
 Automatic verification proves a dump is readable. It does not prove it
@@ -190,8 +273,13 @@ restores, and it does not prove the data is right. Once a quarter, run:
 ```bash
 /opt/mbc-backup/test-restore.sh mbc_ocr        # pgvector, highest risk
 /opt/mbc-backup/test-restore.sh mbc360         # PostgreSQL 17, highest risk
+/opt/mbc-backup/test-restore.sh po_app_rm_price   # file database
 /opt/mbc-backup/test-restore.sh <one other site>
 ```
+
+The drill picks the right procedure from the site name, and never touches the
+running application: a file database is restored into a scratch directory,
+checked, and thrown away.
 
 Also run it after every PostgreSQL upgrade: a major version change can break
 dump compatibility.
