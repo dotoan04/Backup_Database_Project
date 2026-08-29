@@ -50,8 +50,14 @@ docker stop <app_container>
 ls -lht /var/backups/mbc/
 ```
 
-If nothing local is usable, download from SharePoint:
-`/Shared Documents/DB_Backups/{site}_db_backup/{year}/`
+If nothing local is usable, fetch the set back from SharePoint. The checksum is
+verified as part of the download, so this replaces step 3's first command:
+
+```bash
+/opt/mbc-backup/download.py --site <sitename> --list
+/opt/mbc-backup/download.py --site <sitename> --run-id YYYYMMDD_HHMM
+# -> /var/backups/mbc/restore/, dump + .sha256 + .meta.json + globals together
+```
 
 **Take the newest backup from BEFORE the incident**, not simply the newest
 file. If corruption has been running for days, the most recent backup contains
@@ -223,7 +229,12 @@ DB=${APP_DIR}/data/app.db
 # 1. Pick the backup. Newest local copy:
 ls -lt /var/backups/mbc/${SITE}_backup_*.db
 SNAP=/var/backups/mbc/${SITE}_backup_YYYYMMDD_HHMM.db
-# Older than 7 days: download it from SharePoint /DB_Backups/${SITE}/{year}/
+
+# Older than 7 days, or this host lost its disk - fetch it back from SharePoint.
+# The checksum is verified as part of the download.
+/opt/mbc-backup/download.py --site "$SITE" --list
+/opt/mbc-backup/download.py --site "$SITE" --run-id YYYYMMDD_HHMM
+SNAP=/var/backups/mbc/restore/${SITE}_backup_YYYYMMDD_HHMM.db
 
 # 2. Verify it BEFORE trusting it. Never skip this.
 cd "$(dirname "$SNAP")" && sha256sum -c "$(basename "$SNAP").sha256"

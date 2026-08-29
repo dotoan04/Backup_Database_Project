@@ -41,7 +41,7 @@ say "Installing scripts into ${BASE_DIR}"
 mkdir -p "$BASE_DIR"
 chmod 700 "$BASE_DIR"
 for f in backup.sh verify.sh notify.sh test-restore.sh upload.py rotate.py graph.py \
-         sqlite-snapshot.py discover.py runbook.md; do
+         sqlite-snapshot.py discover.py download.py runbook.md; do
   install -m 0755 -o root -g root "${REPO_DIR}/src/${f}" "${BASE_DIR}/${f}"
 done
 # Sourced and imported, never executed directly.

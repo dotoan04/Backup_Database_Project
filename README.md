@@ -71,6 +71,7 @@ src/                       -> installed into /opt/mbc-backup
   rotate.py                SharePoint retention
   sqlite-snapshot.py       consistent snapshot of a file database
   discover.py              finds databases on the host that are not backed up
+  download.py              fetches a backup set back from SharePoint
   test-restore.sh          quarterly restore drill, both site types
   runbook.md               what to do at 02:00 when something is broken
   .env.example             configuration template
@@ -178,6 +179,15 @@ Re-running is always safe; every step is idempotent.
 
 [`src/runbook.md`](src/runbook.md), installed at `/opt/mbc-backup/runbook.md`.
 Read it before you need it.
+
+```bash
+/opt/mbc-backup/download.py --site <sitename> --list      # what is on SharePoint
+/opt/mbc-backup/download.py --site <sitename>             # newest set, checksum verified
+/opt/mbc-backup/test-restore.sh <sitename> <downloaded file>
+```
+
+Local copies cover the last 7 days; anything older, or a host that lost its
+disk, goes through `download.py`.
 
 Two traps most likely to catch you:
 
