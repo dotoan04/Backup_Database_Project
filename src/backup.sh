@@ -247,7 +247,13 @@ for LINE in "${SITE_LINES[@]}"; do
   SITE_ENCRYPTED="false"
 
   if [ -z "$SITE" ] || [ -z "$CONTAINER" ] || [ -z "$DB_USER" ] || [ -z "$DB_NAME" ]; then
-    log "ERROR: malformed sites.conf line: ${LINE}"
+    # A file-database line pasted into the wrong inventory is the likely
+    # mistake, and "malformed" on its own sends people hunting for a typo.
+    if [ "$CONTAINER" = "sqlite" ]; then
+      log "ERROR: ${SITE} is a file-database line and belongs in ${FILES_CONF}, not ${SITES_CONF}: ${LINE}"
+    else
+      log "ERROR: malformed sites.conf line, expected sitename|container|db_user|db_name: ${LINE}"
+    fi
     FAIL_CODES+=("$EXIT_PARTIAL")
     continue
   fi
@@ -345,11 +351,17 @@ for LINE in "${SITE_LINES[@]}"; do
   ARTIFACT_SHA="$(sha256_of "$ARTIFACT")"
 
   # ---------- 6. metadata (spec 5.2.5) ----------
+  # Both tools append the packaging build on Debian-based images:
+  #   SHOW server_version  -> 16.13 (Debian 16.13-1.pgdg12+1)
+  #   pg_dump --version    -> pg_dump (PostgreSQL) 16.13 (Debian 16.13-1.pgdg12+1)
+  # Only the release number belongs in the metadata - it is what decides which
+  # image a restore needs. Taking the last field captured `16.13-1.pgdg12+1)`,
+  # trailing bracket included.
   PG_VERSION="$(docker exec -e PGPASSWORD="$PGPASS" "$CONTAINER" \
                   psql -U "$DB_USER" -d "$DB_NAME" -tAc 'SHOW server_version' 2>/dev/null \
-                | tr -d '[:space:]' || true)"
+                | awk 'NR==1{print $1}' || true)"
   PG_DUMP_VERSION="$(docker exec "$CONTAINER" pg_dump --version 2>/dev/null \
-                     | awk '{print $NF}' || true)"
+                     | awk 'NR==1{print $3}' || true)"
   METAFILE="${BACKUP_DIR}/${SITE}_backup_${TS}.meta.json"
   python3 - "$SITE" "$CONTAINER" "$DB_NAME" "${PG_VERSION:-unknown}" \
              "${PG_DUMP_VERSION:-unknown}" "$STARTED_AT" "$SIZE_BYTES" \
