@@ -71,6 +71,22 @@ MIN_INTERESTING_SIZE = 4096
 
 MAX_FILES_SCANNED = 20000
 
+# Fragments in a file name that mark a SQLite database as scratch rather than
+# data of record. Matched against the file name only, never the whole path: a
+# real database living under a directory called `temp` is still a real
+# database, and guessing from the path produces false alarms.
+CACHE_HINTS = ("cache", "tmp", "temp", "session", "queue", "celery", "lock")
+
+# Databases that are only one part of a larger store. Snapshotting the file on
+# its own gives something that cannot be restored by itself, which is worse
+# than not backing it up: it looks like a backup and is not one.
+PARTIAL_STORES = {
+    "chroma.sqlite3":
+        "Chroma keeps its vectors in sibling directories of binary segment "
+        "files; this database is only the catalogue, so a snapshot of it "
+        "alone cannot rebuild the store",
+}
+
 
 def run(args, timeout=30):
     """Run a command, return (rc, stdout). stderr is folded into stdout."""
@@ -110,20 +126,43 @@ def env_map(details):
 
 
 def classify(details, env):
-    """Best guess at the engine of the database this container serves."""
+    """Best guess at the engine this container serves.
+
+    Returns (engine, certain). `certain` is False when the guess came only
+    from environment variables, which is not enough on its own: every
+    application that talks to PostgreSQL carries POSTGRES_PASSWORD in its
+    environment so it can connect. Ten application containers on this fleet
+    were misread as database servers that way. The caller confirms an
+    uncertain guess by probing for the client binary.
+    """
     image = ((details.get("Config") or {}).get("Image") or "").lower()
     for fragment, engine in IMAGE_ENGINES:
         if fragment in image:
-            return engine
-    # Hand-built images do not always carry a recognisable name, so fall back
-    # to the environment the official images set.
-    if "POSTGRES_PASSWORD" in env or "POSTGRES_DB" in env or "PGDATA" in env:
-        return "postgres"
+            return engine, True
+
+    # PGDATA points at a data directory, so only a server sets it. The others
+    # are connection settings and prove nothing by themselves.
+    if "PGDATA" in env:
+        return "postgres", True
+    if "POSTGRES_PASSWORD" in env or "POSTGRES_DB" in env:
+        return "postgres", False
     if "MYSQL_ROOT_PASSWORD" in env or "MARIADB_ROOT_PASSWORD" in env:
-        return "mysql"
+        return "mysql", False
     if "MONGO_INITDB_ROOT_USERNAME" in env:
-        return "mongodb"
-    return "application"
+        return "mongodb", False
+    return "application", True
+
+
+def has_command(container, binary):
+    """Is a binary on PATH inside the container?
+
+    A PostgreSQL server image always ships psql; an application image almost
+    never does. That is what separates the server from the things talking to
+    it when the image name gives nothing away.
+    """
+    rc, _ = run(["docker", "exec", container, "sh", "-c",
+                 "command -v %s >/dev/null 2>&1" % binary], timeout=15)
+    return rc == 0
 
 
 def compose_project(details, name):
@@ -222,6 +261,26 @@ def find_sqlite_files(root, max_depth, budget):
     return found, budget
 
 
+def review_reason(path, destination):
+    """Why this file may not be data worth backing up. None means it is.
+
+    A judgement call, so the answer is a sentence rather than a verdict: these
+    are listed for a human to decide on, never silently dropped. Not knowing a
+    database exists is the failure this whole tool is against.
+    """
+    name = os.path.basename(path)
+    if name in PARTIAL_STORES:
+        return PARTIAL_STORES[name]
+    if name.startswith("."):
+        return "a hidden file, which is usually a library's own scratch database"
+    for hint in CACHE_HINTS:
+        if hint in name.lower():
+            return "the file name contains %r - confirm it is data and not a cache" % hint
+    if destination.rstrip("/") == "/tmp" or destination.startswith("/tmp/"):
+        return "mounted at %s, which applications treat as scratch space" % destination
+    return None
+
+
 def read_inventory(path):
     rows = []
     if not os.path.isfile(path):
@@ -278,9 +337,19 @@ def main():
     for details in containers:
         name = (details.get("Name") or "").lstrip("/")
         env = env_map(details)
-        engine = classify(details, env)
+        engine, certain = classify(details, env)
         project = compose_project(details, name)
         image = (details.get("Config") or {}).get("Image") or "?"
+
+        # An engine guessed from environment variables alone has to be
+        # confirmed, or every application container that connects to a
+        # database gets reported as one. When the client binary is absent this
+        # is an application, and it falls through to the SQLite scan below -
+        # which is also where its own database may be hiding.
+        if not certain and engine in ("postgres", "mysql", "mongodb"):
+            client = {"postgres": "psql", "mysql": "mysql", "mongodb": "mongosh"}[engine]
+            if not has_command(name, client):
+                engine = "application"
 
         if engine == "postgres":
             user = env.get("POSTGRES_USER", "postgres")
@@ -337,7 +406,7 @@ def main():
                     continue
                 if not tables:
                     continue   # a real SQLite file, but empty - not data yet
-                stem = os.path.splitext(os.path.basename(path))[0]
+                stem = os.path.splitext(os.path.basename(path))[0].lstrip(".")
                 base = slug(project if stem in ("app", "db", "database", "data")
                             else "%s_%s" % (project, stem))
                 new_sqlite.append({
@@ -346,6 +415,7 @@ def main():
                     "container": name, "mount": "%s %s -> %s" % (mount_type, source, destination),
                     "size": os.path.getsize(path),
                     "wal": os.path.exists(path + "-wal"),
+                    "review": review_reason(path, destination),
                 })
 
     # ---- report --------------------------------------------------------------
@@ -371,21 +441,43 @@ def main():
                                        item["user"], item["database"]))
         print()
 
-    if new_sqlite:
-        print("NEW - SQLite (%d)" % len(new_sqlite))
-        for item in new_sqlite:
-            print("  %s" % item["path"])
-            print("    container %s  (%s)" % (item["container"], item["image"]))
-            print("    mount     %s" % item["mount"])
-            print("    %d bytes%s, tables: %s"
-                  % (item["size"], ", WAL active" if item["wal"] else "",
-                     ", ".join(item["tables"][:8])
-                     + (" ..." if len(item["tables"]) > 8 else "")))
+    def describe_sqlite(item):
+        print("  %s" % item["path"])
+        print("    container %s  (%s)" % (item["container"], item["image"]))
+        print("    mount     %s" % item["mount"])
+        print("    %d bytes%s, tables: %s"
+              % (item["size"], ", WAL active" if item["wal"] else "",
+                 ", ".join(item["tables"][:8])
+                 + (" ..." if len(item["tables"]) > 8 else "")))
+        if item["review"]:
+            print("    NOTE      %s" % item["review"])
+
+    data_sqlite = [i for i in new_sqlite if not i["review"]]
+    review_sqlite = [i for i in new_sqlite if i["review"]]
+
+    if data_sqlite:
+        print("NEW - SQLite (%d)" % len(data_sqlite))
+        for item in data_sqlite:
+            describe_sqlite(item)
         print()
         print("  Add to /opt/mbc-backup/sites-files.conf:")
         print()
-        for item in new_sqlite:
+        for item in data_sqlite:
             print("    %s|sqlite|%s" % (item["sitename"], item["path"]))
+        print()
+
+    if review_sqlite:
+        print("NEW - SQLite, REVIEW BEFORE ADDING (%d)" % len(review_sqlite))
+        for item in review_sqlite:
+            describe_sqlite(item)
+        print()
+        print("  These look like scratch or partial data rather than a database")
+        print("  of record. They are listed because not knowing a database exists")
+        print("  is worse than deciding not to back it up. The lines below are")
+        print("  commented out on purpose - uncomment only what you have checked:")
+        print()
+        for item in review_sqlite:
+            print("    #%s|sqlite|%s" % (item["sitename"], item["path"]))
         print()
 
     if unsupported:
