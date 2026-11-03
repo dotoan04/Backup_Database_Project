@@ -259,9 +259,9 @@ across **both** files and must never change once a site has been backed up.
 See [docs/file-database-backup.md](docs/file-database-backup.md) for how to
 find the host path of a bind-mounted database.
 
-File names use the **sitename**, never the database name: `powerapp_sku` and
-`product_database` both use a database called `master_product`, and naming by
-database would make them silently overwrite each other on SharePoint.
+File names use the **sitename**, never the database name: two sites whose
+databases share a name (several apps call theirs `master_product` or `app.db`)
+would otherwise silently overwrite each other on SharePoint.
 
 Passwords are read from each container's environment with `docker inspect`, so
 there is no second copy of 9 secrets to keep in sync, and no dependence on the

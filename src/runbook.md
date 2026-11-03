@@ -222,9 +222,9 @@ place. Two things make it easy to get wrong:
 ### Procedure
 
 ```bash
-SITE=po_app_rm_price
-APP_DIR=/home/po_app/app                      # from sites-files.conf, third field
-DB=${APP_DIR}/data/app.db
+SITE=<sitename>                               # first field of sites-files.conf
+DB=<path>                                     # third field of sites-files.conf
+APP_DIR=<compose project dir>                 # docker inspect <container> --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'
 
 # 1. Pick the backup. Newest local copy:
 ls -lt /var/backups/mbc/${SITE}_backup_*.db
@@ -284,7 +284,7 @@ restores, and it does not prove the data is right. Once a quarter, run:
 ```bash
 /opt/mbc-backup/test-restore.sh mbc_ocr        # pgvector, highest risk
 /opt/mbc-backup/test-restore.sh mbc360         # PostgreSQL 17, highest risk
-/opt/mbc-backup/test-restore.sh po_app_rm_price   # file database
+/opt/mbc-backup/test-restore.sh max_biocare_ai_webui   # file database
 /opt/mbc-backup/test-restore.sh <one other site>
 ```
 

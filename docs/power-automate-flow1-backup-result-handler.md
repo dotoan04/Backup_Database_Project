@@ -80,6 +80,24 @@ Folder: /DB_Backups/ (30 day retention)
 
 Get an @mention token for a user → the technical owner.
 
+Build the failed-site list with two actions first. Workflow expressions have
+no `filter()` function and `select()` takes no per-item lambda, so this cannot
+be a single inline expression.
+
+1. **Filter array**, renamed `Filter_failed_sites`
+   - From: `triggerBody()?['sites']`
+   - Condition (advanced mode): `@not(equals(item()?['status'], 'success'))`
+
+   > The condition keeps everything that is **not** `success`. Getting this
+   > backwards prints the successful sites under "Failed sites", each with
+   > `step: unknown | No error detail` because a success row has
+   > `step_failed` and `error` set to null.
+2. **Select**, renamed `Select_failed_lines`, text mode (not key/value)
+   - From: `body('Filter_failed_sites')`
+   - Map: `concat(item()?['site'], ' | step: ', coalesce(item()?['step_failed'], 'unknown'), ' | ', coalesce(item()?['error'], 'No error detail'))`
+
+Check: the number of lines must equal `summary.failed_count`.
+
 Teams message:
 
 ```
@@ -89,7 +107,7 @@ Teams message:
 @{triggerBody()?['summary']?['success_count']}/@{triggerBody()?['summary']?['total_sites']} sites OK · @{triggerBody()?['summary']?['failed_count']} FAILED
 
 Failed sites:
-@{join(select(filter(triggerBody()?['sites'], equals(item()?['status'], 'failed')), concat(item()?['site'], ' — step: ', item()?['step_failed'], ' — ', item()?['error'])), '
+@{join(body('Select_failed_lines'), '
 ')}
 
 Last 20 log lines:

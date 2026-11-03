@@ -25,6 +25,6 @@
 #   -> take "Source" of the entry whose "Type" is "bind"
 # =============================================================================
 
-# PO app (RM Price + synced Raw Materials), bind mount ./data in ~po_app/app.
-# Owned by root because the container runs as root; the backup runs as root too.
-po_app_rm_price|sqlite|/home/po_app/app/data/app.db
+# max-biocare-ai stack, named Docker volumes (host path under /var/lib/docker).
+max_biocare_ai_webui|sqlite|/var/lib/docker/volumes/max-biocare-ai_open-webui-data/_data/webui.db
+max_biocare_ai_grafana|sqlite|/var/lib/docker/volumes/max-biocare-ai_grafana-data/_data/grafana.db

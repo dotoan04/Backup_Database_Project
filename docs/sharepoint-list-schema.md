@@ -15,7 +15,7 @@ Create the list on the same site that holds the `DB_Backups` library.
 | Column | Type | Notes |
 |---|---|---|
 | `Title` | Single line of text | holds `run_id`, e.g. `20260731_0200` |
-| `Site` | Choice | `marketplace_misa`, `skuapp`, `misa_sync_engine`, `mbc360`, `mbc_tool_ads`, `powerapp_sku`, `timesheet_misa`, `mbc_ocr`, `product_database` |
+| `Site` | Choice | `marketplace_misa`, `skuapp`, `misa_sync_engine`, `mbc360`, `mbc_tool_ads`, `timesheet_misa`, `mbc_ocr`, `product_database` |
 | `Status` | Choice | `success`, `failed`, `fatal` — **the column the dead-man switch filters on** |
 | `StepFailed` | Single line of text | `precheck` / `dump` / `verify` / `encrypt` / `upload` / `rotate` |
 | `FileName` | Single line of text | dump file name |
@@ -48,8 +48,7 @@ Connect-PnPOnline -Url "https://maxbiocare.sharepoint.com/sites/<site>" -Interac
 New-PnPList -Title "DB_Backup_Log" -Template GenericList
 
 $choices = @("marketplace_misa","skuapp","misa_sync_engine","mbc360",
-             "mbc_tool_ads","powerapp_sku","timesheet_misa","mbc_ocr",
-             "product_database")
+             "mbc_tool_ads","timesheet_misa","mbc_ocr","product_database")
 
 Add-PnPField -List "DB_Backup_Log" -DisplayName "Site" -InternalName "Site" `
   -Type Choice -Choices $choices -AddToDefaultView

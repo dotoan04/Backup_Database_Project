@@ -18,9 +18,9 @@ kept, with a loud message: it is evidence about what went wrong, and deleting
 evidence during an incident is its own mistake.
 
 Usage:
-    download.py --site po_app_rm_price --list
-    download.py --site po_app_rm_price                       # newest set
-    download.py --site po_app_rm_price --run-id 20260829_0137
+    download.py --site max_biocare_ai_webui --list
+    download.py --site max_biocare_ai_webui                       # newest set
+    download.py --site max_biocare_ai_webui --run-id 20260829_0137
     download.py --site mbc_ocr --year 2026 --dest-dir /var/backups/mbc/restore
 """
 
